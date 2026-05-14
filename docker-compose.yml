@@ -1,0 +1,75 @@
+version: "3.9"
+
+services:
+  node1:
+    build: .
+    environment:
+      NODE_ID: "1"
+      NODE_PORT: "8001"
+      NODE_TRANSPORT: "http"
+      NODE_PEERS: "node1:8001,node2:8002,node3:8003,node4:8004,node5:8005"
+    ports: ["8001:8001"]
+    volumes: ["./data/node1:/app/data"]
+    networks: [decidp]
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8001
+
+  node2:
+    build: .
+    environment:
+      NODE_ID: "2"
+      NODE_PORT: "8002"
+      NODE_TRANSPORT: "http"
+      NODE_PEERS: "node1:8001,node2:8002,node3:8003,node4:8004,node5:8005"
+    ports: ["8002:8002"]
+    volumes: ["./data/node2:/app/data"]
+    networks: [decidp]
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8002
+
+  node3:
+    build: .
+    environment:
+      NODE_ID: "3"
+      NODE_PORT: "8003"
+      NODE_TRANSPORT: "http"
+      NODE_PEERS: "node1:8001,node2:8002,node3:8003,node4:8004,node5:8005"
+    ports: ["8003:8003"]
+    volumes: ["./data/node3:/app/data"]
+    networks: [decidp]
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8003
+
+  node4:
+    build: .
+    environment:
+      NODE_ID: "4"
+      NODE_PORT: "8004"
+      NODE_TRANSPORT: "http"
+      NODE_PEERS: "node1:8001,node2:8002,node3:8003,node4:8004,node5:8005"
+    ports: ["8004:8004"]
+    volumes: ["./data/node4:/app/data"]
+    networks: [decidp]
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8004
+
+  node5:
+    build: .
+    environment:
+      NODE_ID: "5"
+      NODE_PORT: "8005"
+      NODE_TRANSPORT: "http"
+      NODE_PEERS: "node1:8001,node2:8002,node3:8003,node4:8004,node5:8005"
+    ports: ["8005:8005"]
+    volumes: ["./data/node5:/app/data"]
+    networks: [decidp]
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8005
+
+  demo:
+    build: .
+    environment:
+      NODE_TRANSPORT: "http"
+      NODE_PEERS: "node1:8001,node2:8002,node3:8003,node4:8004,node5:8005"
+    depends_on: [node1, node2, node3, node4, node5]
+    networks: [decidp]
+    command: python simulate/run_demo.py
+
+networks:
+  decidp:
+    driver: bridge
