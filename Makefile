@@ -1,4 +1,6 @@
-.PHONY: setup test test-crypto demo docker-build docker-demo docker-test clean
+.PHONY: setup test test-crypto demo net-up net-down net-logs net-clean docker-build docker-demo docker-test clean
+
+COMPOSE = docker compose -p idp
 
 setup:
 	bash setup.sh
@@ -12,16 +14,34 @@ test-crypto:
 demo:
 	NODE_TRANSPORT=local python simulate/run_demo.py
 
+net-up:
+	mkdir -p data ~/.decidp
+	$(COMPOSE) build
+	$(COMPOSE) up -d
+	@echo ""
+	@echo "All containers starting. Run 'make net-logs' to watch coordinator."
+	@echo "When all nodes show ONLINE in 'python cli.py', you are ready."
+
+net-down:
+	$(COMPOSE) down
+
+net-logs:
+	$(COMPOSE) logs -f coordinator
+
+net-clean:
+	$(COMPOSE) down -v
+	sudo rm -rf data/
+
 docker-build:
-	docker compose build
+	$(COMPOSE) build
 
 docker-demo:
-	docker compose up --abort-on-container-exit demo
+	$(COMPOSE) up --abort-on-container-exit demo
 
 docker-test:
-	docker compose run --rm demo pytest tests/ -v
+	$(COMPOSE) run --rm demo pytest tests/ -v
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +
 	find . -name "*.pyc" -delete
-	rm -rf data/
+	sudo rm -rf data/

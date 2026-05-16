@@ -58,17 +58,20 @@ class HTTPTransport(NodeTransport):
     Real HTTP transport — each node is a separate process/container.
     Reads peer addresses from NODE_PEERS env var:
         NODE_PEERS=node1:8001,node2:8002,...
+
+    Uses asyncio.wait_for inside each ThreadPoolExecutor thread so that
+    Docker's internal network SYN-drop behaviour (which ignores socket-level
+    timeouts) is properly cancelled after NODE_TIMEOUT seconds.
     """
 
-    def __init__(self):
-        import httpx
+    NODE_TIMEOUT = 2.0   # seconds per node request
 
+    def __init__(self):
         peers_env = os.environ.get("NODE_PEERS", "")
         self._peers: dict[int, str] = {}
         if peers_env:
             for i, addr in enumerate(peers_env.split(","), start=1):
                 self._peers[i] = addr.strip()
-        self._client = httpx.Client(timeout=5.0)
 
     def request_partial_proof(
         self,
@@ -76,20 +79,61 @@ class HTTPTransport(NodeTransport):
         did: str,
         challenge_nonce_hex: str,
     ) -> dict | None:
+        import asyncio
+        import httpx
+
+        addr = self._peers.get(target_node_id)
+        if not addr:
+            return None
+
+        async def _fetch() -> dict | None:
+            async with httpx.AsyncClient() as client:
+                resp = await asyncio.wait_for(
+                    client.post(
+                        f"http://{addr}/internal/partial_proof",
+                        json={"did": did, "challenge_nonce": challenge_nonce_hex},
+                    ),
+                    timeout=self.NODE_TIMEOUT,
+                )
+                return resp.json() if resp.status_code == 200 else None
+
+        try:
+            # This runs in a ThreadPoolExecutor thread (outside FastAPI's event
+            # loop), so asyncio.run() creates a fresh loop — safe to call here.
+            return asyncio.run(_fetch())
+        except Exception as e:
+            print(f"[Transport] HTTP error node {target_node_id}: {e}")
+            return None
+
+    async def request_partial_proof_async(
+        self,
+        target_node_id: int,
+        did: str,
+        challenge_nonce_hex: str,
+    ) -> dict | None:
+        """
+        Async variant — call from FastAPI's event loop via asyncio.gather.
+        asyncio.wait_for properly cancels after NODE_TIMEOUT when called
+        from the main event loop (unlike ThreadPoolExecutor threads).
+        """
+        import asyncio
+        import httpx
+
         addr = self._peers.get(target_node_id)
         if not addr:
             return None
         try:
-            url = f"http://{addr}/internal/partial_proof"
-            resp = self._client.post(
-                url,
-                json={"did": did, "challenge_nonce": challenge_nonce_hex},
-            )
-            if resp.status_code == 200:
-                return resp.json()
-            return None
+            async with httpx.AsyncClient() as client:
+                resp = await asyncio.wait_for(
+                    client.post(
+                        f"http://{addr}/internal/partial_proof",
+                        json={"did": did, "challenge_nonce": challenge_nonce_hex},
+                    ),
+                    timeout=self.NODE_TIMEOUT,
+                )
+                return resp.json() if resp.status_code == 200 else None
         except Exception as e:
-            print(f"[Transport] HTTP error node {target_node_id}: {e}")
+            print(f"[Transport] async error node {target_node_id}: {e}")
             return None
 
 

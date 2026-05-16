@@ -5,6 +5,7 @@ import hashlib
 import itertools
 import json
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from crypto import IAT_TTL_SECONDS, N_NODES, THRESHOLD
 from crypto.pqc import verify as pqc_verify
@@ -43,7 +44,14 @@ class AuthenticationService:
         self.transport = transport
         self.data_dir = data_dir
 
-    def authenticate(self, did: str, challenge_id: str, signature_hex: str) -> dict:
+    def authenticate(
+        self,
+        did: str,
+        challenge_id: str,
+        signature_hex: str,
+        *,
+        _proofs: list[dict] | None = None,
+    ) -> dict:
         # ── Step 1: consume challenge ─────────────────────────────────────
         nonce = self.challenge_manager.consume(challenge_id)
         if nonce is None:
@@ -67,17 +75,27 @@ class AuthenticationService:
             return _fail("invalid_signature")
 
         # ── Step 4: collect partial proofs from all nodes ─────────────────
-        proofs = []
-        for node in self.nodes:
-            proof = self.transport.request_partial_proof(
-                node.node_id, did, nonce.hex()
-            )
-            status = "responded" if proof is not None else (
-                "offline" if not node.online else "error"
-            )
-            print(f"  [Node {node.node_id}] {status}")
-            if proof is not None:
-                proofs.append(proof)
+        if _proofs is not None:
+            proofs = _proofs
+            for p in proofs:
+                print(f"  [Node {p['node_id']}] responded (pre-collected)")
+        else:
+            proofs = []
+            with ThreadPoolExecutor(max_workers=len(self.nodes)) as pool:
+                future_to_node = {
+                    pool.submit(
+                        self.transport.request_partial_proof,
+                        node.node_id, did, nonce.hex(),
+                    ): node
+                    for node in self.nodes
+                }
+                for future in as_completed(future_to_node):
+                    node  = future_to_node[future]
+                    proof = future.result()
+                    status = "responded" if proof is not None else "offline/error"
+                    print(f"  [Node {node.node_id}] {status}")
+                    if proof is not None:
+                        proofs.append(proof)
 
         # ── Step 5: PBFT consensus ────────────────────────────────────────
         round_id = hashlib.sha3_256(nonce + did.encode()).hexdigest()[:16]

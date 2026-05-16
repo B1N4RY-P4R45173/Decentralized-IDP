@@ -1,3 +1,4 @@
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -11,7 +12,7 @@ from crypto import N_NODES
 from crypto.pqc import PQC_AVAILABLE
 from ledger.ledger import Ledger
 from node.node import Node
-from node.transport import get_transport
+from node.transport import HTTPTransport, get_transport
 from registration.register import RegistrationService
 
 # ── Module-level singletons (populated in lifespan) ───────────────────────────
@@ -21,19 +22,21 @@ _ledger: Ledger | None = None
 _challenge_manager: ChallengeManager | None = None
 _reg_service: RegistrationService | None = None
 _auth_service: AuthenticationService | None = None
+_transport = None
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _nodes, _ledger, _challenge_manager, _reg_service, _auth_service
+    global _nodes, _ledger, _challenge_manager, _reg_service, _auth_service, _transport
 
     data_dir = os.environ.get("DATA_DIR", "data")
 
     _nodes = [Node(node_id=i, data_dir=data_dir) for i in range(1, N_NODES + 1)]
 
-    transport = get_transport()
+    _transport = get_transport()
+    transport = _transport
     if hasattr(transport, "register_node"):          # LocalTransport
         for n in _nodes:
             transport.register_node(n.node_id, n)
@@ -138,7 +141,23 @@ async def get_challenge(req: ChallengeRequest):
 @app.post("/authenticate", response_model=AuthResponse)
 async def authenticate(req: AuthRequest):
     """Authenticate using a signed challenge. Returns IAT on success."""
-    result = _auth_service.authenticate(req.did, req.challenge_id, req.signature)
+    # In HTTP mode, collect proofs concurrently from the event loop so that
+    # asyncio.wait_for properly cancels dead-node connections (the sync
+    # ThreadPoolExecutor path cannot cancel OS-level TCP SYN retries).
+    pre_proofs = None
+    if isinstance(_transport, HTTPTransport):
+        nonce = _challenge_manager.peek(req.challenge_id)
+        if nonce is not None:
+            nonce_hex = nonce.hex()
+            results = await asyncio.gather(*[
+                _transport.request_partial_proof_async(n.node_id, req.did, nonce_hex)
+                for n in _nodes
+            ])
+            pre_proofs = [p for p in results if p is not None]
+
+    result = _auth_service.authenticate(
+        req.did, req.challenge_id, req.signature, _proofs=pre_proofs
+    )
     return AuthResponse(
         status=result["status"],
         iat=result.get("iat"),

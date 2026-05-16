@@ -1,19 +1,32 @@
-FROM openquantumsafe/liboqs-python:latest
+FROM python:3.12-slim AS liboqs-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git cmake build-essential libssl-dev ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs \
+    && cmake -S /tmp/liboqs -B /tmp/liboqs/build \
+        -DBUILD_SHARED_LIBS=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+    && cmake --build /tmp/liboqs/build -j$(nproc) \
+    && cmake --install /tmp/liboqs/build \
+    && rm -rf /tmp/liboqs
+
+FROM python:3.12-slim
+
+COPY --from=liboqs-builder /usr/local/lib/liboqs.so* /usr/local/lib/
+COPY --from=liboqs-builder /usr/local/include/oqs /usr/local/include/oqs
+RUN ldconfig
 
 WORKDIR /app
 
-# Install Python dependencies
 COPY requirements-docker.txt .
 RUN pip install --no-cache-dir -r requirements-docker.txt
 
-# Copy source
 COPY . .
-
-# Create data directory
 RUN mkdir -p data
 
-# Default: run the API on port 8000
-# Override CMD for node-specific startup
 ENV NODE_TRANSPORT=http
 ENV NODE_ID=1
 ENV NODE_PORT=8000

@@ -31,6 +31,13 @@ class ChallengeManager:
             "expires_in": CHALLENGE_TTL_SECONDS,
         }
 
+    def peek(self, challenge_id: str) -> bytes | None:
+        """Return nonce without consuming — used for async pre-collection."""
+        entry = self._pending.get(challenge_id)
+        if entry is None or time.time() > entry["expires_at"]:
+            return None
+        return entry["nonce"]
+
     def consume(self, challenge_id: str) -> bytes | None:
         entry = self._pending.get(challenge_id)
         if entry is None:
